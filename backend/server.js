@@ -1,130 +1,134 @@
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
+const mongoose = require('mongoose');
+
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 
-// Firebase Admin SDK sozlash
-const serviceAccount = require('./service-account.json');
+// MongoDB ulanishi
+mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB ulanishi muvaffaqiyatli!'))
+  .catch(err => console.error('MongoDB ulanishda xatolik:', err));
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://fmaktab-4f687-default-rtdb.firebaseio.com/"
+// Shemalar (Schemes)
+const userSchema = new mongoose.Schema({
+  id: Number,
+  username: String,
+  password: String,
+  role: String,
+  name: String,
+  subject: { type: String, default: '' },
+  class: { type: String, default: '' }
 });
 
-const db = admin.database();
+const classSchema = new mongoose.Schema({
+  id: Number,
+  name: String
+});
 
-// Ma'lumotlarni boshlash
+const gradeSchema = new mongoose.Schema({
+  studentId: Number,
+  subject: String,
+  date: String,
+  grade: Number
+});
+
+const User = mongoose.model('User', userSchema);
+const Class = mongoose.model('Class', classSchema);
+const Grade = mongoose.model('Grade', gradeSchema);
+
+// Boshlang'ich ma'lumotlarni yaratish
 const initData = async () => {
-  const usersRef = db.ref('users');
-  const snapshot = await usersRef.once('value');
-  if (!snapshot.exists()) {
+  const adminCount = await User.countDocuments({ role: 'admin' });
+  if (adminCount === 0) {
     console.log('Admin foydalanuvchisini yaratish...');
-    const adminUser = { id: 1, username: 'admin', password: 'admin123', role: 'admin', name: 'Admin' };
-    await usersRef.set([adminUser]);
+    const adminUser = new User({ id: 1, username: 'admin', password: 'admin123', role: 'admin', name: 'Admin' });
+    await adminUser.save();
     console.log('Admin yaratildi:', adminUser);
   }
 
-  const classesRef = db.ref('classes');
-  const classesSnapshot = await classesRef.once('value');
-  if (!classesSnapshot.exists()) {
-    await classesRef.set([]);
+  const classCount = await Class.countDocuments();
+  if (classCount === 0) {
+    await Class.create([]);
   }
 
-  const gradesRef = db.ref('grades');
-  const gradesSnapshot = await gradesRef.once('value');
-  if (!gradesSnapshot.exists()) {
-    await gradesRef.set([]);
+  const gradeCount = await Grade.countDocuments();
+  if (gradeCount === 0) {
+    await Grade.create([]);
   }
 };
 
 // Users endpoint'lari
 app.get('/users', async (req, res) => {
-  const snapshot = await db.ref('users').once('value');
-  res.json(snapshot.val() || []);
+  const users = await User.find();
+  res.json(users);
 });
 
 app.post('/users', async (req, res) => {
   const user = req.body;
-  const snapshot = await db.ref('users').once('value');
-  let users = snapshot.val() || [];
+  const users = await User.find();
   user.id = users.length + 1;
-  users.push(user);
-  await db.ref('users').set(users);
-  res.json(user);
+  const newUser = new User(user);
+  await newUser.save();
+  res.json(newUser);
 });
 
 app.put('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   const updatedUser = req.body;
-  const snapshot = await db.ref('users').once('value');
-  let users = snapshot.val() || [];
-  users = users.map(u => u.id === id ? { ...u, ...updatedUser } : u);
-  await db.ref('users').set(users);
-  res.json(updatedUser);
+  const user = await User.findOneAndUpdate({ id }, updatedUser, { new: true });
+  res.json(user);
 });
 
 app.delete('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const snapshot = await db.ref('users').once('value');
-  let users = snapshot.val() || [];
-  users = users.filter(u => u.id !== id);
-  await db.ref('users').set(users);
+  await User.findOneAndDelete({ id });
   res.json({ message: 'User deleted' });
 });
 
 // Classes endpoint'lari
 app.get('/classes', async (req, res) => {
-  const snapshot = await db.ref('classes').once('value');
-  res.json(snapshot.val() || []);
+  const classes = await Class.find();
+  res.json(classes);
 });
 
 app.post('/classes', async (req, res) => {
   const cls = req.body;
-  const snapshot = await db.ref('classes').once('value');
-  let classes = snapshot.val() || [];
+  const classes = await Class.find();
   cls.id = classes.length + 1;
-  classes.push(cls);
-  await db.ref('classes').set(classes);
-  res.json(cls);
+  const newClass = new Class(cls);
+  await newClass.save();
+  res.json(newClass);
 });
 
 app.delete('/classes/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const snapshot = await db.ref('classes').once('value');
-  let classes = snapshot.val() || [];
-  const deletedClass = classes.find(c => c.id === id)?.name;
-  classes = classes.filter(c => c.id !== id);
-  await db.ref('classes').set(classes);
+  const deletedClass = await Class.findOne({ id });
+  await Class.findOneAndDelete({ id });
 
-  const usersSnapshot = await db.ref('users').once('value');
-  let users = usersSnapshot.val() || [];
-  users.forEach(u => {
-    if (u.role === 'student' && u.class === deletedClass) u.class = '';
-  });
-  await db.ref('users').set(users);
+  if (deletedClass) {
+    await User.updateMany({ role: 'student', class: deletedClass.name }, { $set: { class: '' } });
+  }
   res.json({ message: 'Class deleted' });
 });
 
 // Grades endpoint'lari
 app.get('/grades', async (req, res) => {
-  const snapshot = await db.ref('grades').once('value');
-  res.json(snapshot.val() || []);
+  const grades = await Grade.find();
+  res.json(grades);
 });
 
 app.post('/grades', async (req, res) => {
   const grade = req.body;
-  const snapshot = await db.ref('grades').once('value');
-  let grades = snapshot.val() || [];
-  grades.push(grade);
-  await db.ref('grades').set(grades);
-  res.json(grade);
+  const newGrade = new Grade(grade);
+  await newGrade.save();
+  res.json(newGrade);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server ${PORT}-portda ishga tushdi`);
   initData();
 });
