@@ -1,130 +1,113 @@
 const express = require('express');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const fs = require('fs').promises;
 
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 
-// MongoDB ulanishi
-mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('MongoDB ulanishi muvaffaqiyatli!'))
-  .catch(err => console.error('MongoDB ulanishda xatolik:', err));
+// Ma'lumotlarni data.json faylidan o'qish va yozish
+const DATA_FILE = './data.json';
 
-// Shemalar (Schemes)
-const userSchema = new mongoose.Schema({
-  id: Number,
-  username: String,
-  password: String,
-  role: String,
-  name: String,
-  subject: { type: String, default: '' },
-  class: { type: String, default: '' }
-});
+const readData = async () => {
+  try {
+    const data = await fs.readFile(DATA_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    return { users: [], classes: [], grades: [] };
+  }
+};
 
-const classSchema = new mongoose.Schema({
-  id: Number,
-  name: String
-});
-
-const gradeSchema = new mongoose.Schema({
-  studentId: Number,
-  subject: String,
-  date: String,
-  grade: Number
-});
-
-const User = mongoose.model('User', userSchema);
-const Class = mongoose.model('Class', classSchema);
-const Grade = mongoose.model('Grade', gradeSchema);
+const writeData = async (data) => {
+  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+};
 
 // Boshlang'ich ma'lumotlarni yaratish
 const initData = async () => {
-  const adminCount = await User.countDocuments({ role: 'admin' });
-  if (adminCount === 0) {
+  const data = await readData();
+  if (!data.users || data.users.length === 0) {
     console.log('Admin foydalanuvchisini yaratish...');
-    const adminUser = new User({ id: 1, username: 'admin', password: 'admin123', role: 'admin', name: 'Admin' });
-    await adminUser.save();
+    const adminUser = { id: 1, username: 'admin', password: 'admin123', role: 'admin', name: 'Admin' };
+    data.users = [adminUser];
     console.log('Admin yaratildi:', adminUser);
   }
-
-  const classCount = await Class.countDocuments();
-  if (classCount === 0) {
-    await Class.create([]);
-  }
-
-  const gradeCount = await Grade.countDocuments();
-  if (gradeCount === 0) {
-    await Grade.create([]);
-  }
+  if (!data.classes) data.classes = [];
+  if (!data.grades) data.grades = [];
+  await writeData(data);
 };
 
 // Users endpoint'lari
 app.get('/users', async (req, res) => {
-  const users = await User.find();
-  res.json(users);
+  const data = await readData();
+  res.json(data.users || []);
 });
 
 app.post('/users', async (req, res) => {
   const user = req.body;
-  const users = await User.find();
-  user.id = users.length + 1;
-  const newUser = new User(user);
-  await newUser.save();
-  res.json(newUser);
+  const data = await readData();
+  user.id = (data.users || []).length + 1;
+  data.users = [...(data.users || []), user];
+  await writeData(data);
+  res.json(user);
 });
 
 app.put('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id);
   const updatedUser = req.body;
-  const user = await User.findOneAndUpdate({ id }, updatedUser, { new: true });
-  res.json(user);
+  const data = await readData();
+  data.users = data.users.map(u => u.id === id ? { ...u, ...updatedUser } : u);
+  await writeData(data);
+  res.json(updatedUser);
 });
 
 app.delete('/users/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  await User.findOneAndDelete({ id });
+  const data = await readData();
+  data.users = data.users.filter(u => u.id !== id);
+  await writeData(data);
   res.json({ message: 'User deleted' });
 });
 
 // Classes endpoint'lari
 app.get('/classes', async (req, res) => {
-  const classes = await Class.find();
-  res.json(classes);
+  const data = await readData();
+  res.json(data.classes || []);
 });
 
 app.post('/classes', async (req, res) => {
   const cls = req.body;
-  const classes = await Class.find();
-  cls.id = classes.length + 1;
-  const newClass = new Class(cls);
-  await newClass.save();
-  res.json(newClass);
+  const data = await readData();
+  cls.id = (data.classes || []).length + 1;
+  data.classes = [...(data.classes || []), cls];
+  await writeData(data);
+  res.json(cls);
 });
 
 app.delete('/classes/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const deletedClass = await Class.findOne({ id });
-  await Class.findOneAndDelete({ id });
-
-  if (deletedClass) {
-    await User.updateMany({ role: 'student', class: deletedClass.name }, { $set: { class: '' } });
-  }
+  const data = await readData();
+  const deletedClass = data.classes.find(c => c.id === id)?.name;
+  data.classes = data.classes.filter(c => c.id !== id);
+  data.users.forEach(u => {
+    if (u.role === 'student' && u.class === deletedClass) u.class = '';
+  });
+  await writeData(data);
   res.json({ message: 'Class deleted' });
 });
 
 // Grades endpoint'lari
 app.get('/grades', async (req, res) => {
-  const grades = await Grade.find();
-  res.json(grades);
+  const data = await readData();
+  res.json(data.grades || []);
 });
 
 app.post('/grades', async (req, res) => {
   const grade = req.body;
-  const newGrade = new Grade(grade);
-  await newGrade.save();
-  res.json(newGrade);
+  const data = await readData();
+  data.grades = [...(data.grades || []), grade];
+  await writeData(data);
+  res.json(grade);
 });
 
 const PORT = process.env.PORT || 3000;
